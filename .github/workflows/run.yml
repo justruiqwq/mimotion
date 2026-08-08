@@ -1,41 +1,50 @@
 name: 刷步数
 
 on:
+  # 每 30 分钟检查一次。脚本内部用确定性目标时刻判定，
+  # 只有命中当天目标时刻所在槽位的这次运行才会真正刷步，其余静默退出。
+  # 北京时间 8:00 ~ 23:59（UTC 0:00~15:59），覆盖 BRUSH_HOURS 常用范围。
   schedule:
-    - cron: '28 1,4,7,10,12,14,23 * * *'
+    - cron: '*/30 0-15 * * *'
   workflow_dispatch:
+    inputs:
+      force:
+        description: '忽略随机时刻，立即刷全部账号（用于测试）'
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - name: Checkout codes
         uses: actions/checkout@v5
         with:
-          token: ${{ secrets.PAT }} #此处PAT需要申请，教程详见：README
-      - name: Update system and install zsh
-        run: |
-          sudo -E apt-get -qq update
-          sudo -E apt-get install zsh -y
-          
-      - name: 初始化Python
+          token: ${{ secrets.PAT }}
+      - name: 初始化 Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.10"
-          
+          python-version: "3.11"
       - name: 开始
         env:
-            CONFIG: ${{ secrets.CONFIG }}
-            AES_KEY: ${{ secrets.AES_KEY }}
+          CONFIG: ${{ secrets.CONFIG }}
+          AES_KEY: ${{ secrets.AES_KEY }}
+          FORCE: ${{ github.event.inputs.force }}
         run: |
           pip3 install requests pytz pycryptodome
           python3 main.py
 
       - name: persist tokens
+        # 仅在 encrypted_tokens.data 有变化时才提交，避免无谓的 commit 噪音
         run: |
           git config user.name github-actions
           git config user.email github-actions@users.noreply.github.com
-          git add .
-          git commit -m "persist tokens trigger by ${{ github.event_name }}"
-          git push origin master
+          git add encrypted_tokens.data
+          if git diff --cached --quiet; then
+            echo "token 无变化，跳过提交"
+          else
+            git commit -m "persist tokens trigger by ${{ github.event_name }}"
+            git push origin master
+          fi
