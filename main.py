@@ -1,16 +1,12 @@
 # -*- coding: utf8 -*-
 """
-优雅版 mimotion：每天在配置的小时里随机挑一个时刻，刷一次随机步数。
+优雅版 mimotion：每天固定时刻（北京时间 12:30，由 GitHub Actions cron 触发）刷一次随机步数。
 
-设计要点：
-  - 无状态"恰好一次"：每账号每天的目标时刻由 hash(日期:账号) 确定，
-    30 分钟一个槽位，目标时刻必然只落在唯一一个槽里，因此那个槽的运行负责刷步。
-  - 其余检查运行立即退出，几乎零成本。
-  - FORCE=1（手动触发 workflow）时忽略槽位，立即刷全部账号，用于测试。
-  - 登录沿用华米三层令牌链，token 用 AES_KEY 加密缓存在 encrypted_tokens.data，
-    避免每天重复密码登录。
+- GitHub Actions 每天 12:30(北京) 触发一次本脚本，脚本对所有账号各刷一次随机步数。
+- 手动触发 workflow 并勾选 force 时同样刷全部账号（补刷/测试用）。
+- 登录沿用华米三层令牌链，token 用 AES_KEY 加密缓存在 encrypted_tokens.data。
+- 刷完后通过 Telegram 推送结果。
 """
-import hashlib
 import json
 import os
 import random
@@ -70,46 +66,17 @@ class Config:
         self.sleep_gap = get_int_default(raw, "SLEEP_GAP", 5)
         self.tg_bot_token = (raw.get("TELEGRAM_BOT_TOKEN") or "").strip()
         self.tg_chat_id = (raw.get("TELEGRAM_CHAT_ID") or "").strip()
-        hours = (raw.get("BRUSH_HOURS") or "").strip()
-        self.brush_hours = [int(h) for h in hours.split(",") if h.strip().isdigit()]
-        self.brush_hours = sorted(set(h for h in self.brush_hours if 0 <= h <= 23))
 
     @property
     def valid(self):
         return (self.user_list and len(self.user_list) == len(self.pwd_list)
-                and self.brush_hours and self.max_step >= self.min_step)
-
-
-# ---------------------------------------------------------------- 随机目标时刻
-
-def daily_target_minute(user: str, brush_hours, today=None) -> int:
-    """返回当天该账号的目标时刻（分钟数，0..1439）。
-
-    用 hash(日期:账号) 做确定性选择：前半段选小时、后半段选分钟。
-    这样同一天内多账号各自固定、每天变化，且无需任何状态文件。
-    """
-    if today is None:
-        today = bj_now().strftime("%Y-%m-%d")
-    digest = hashlib.sha256(f"{today}:{user}".encode("utf-8")).hexdigest()
-    r1 = int(digest[:16], 16)
-    r2 = int(digest[16:32], 16)
-    hour = brush_hours[r1 % len(brush_hours)]
-    minute = r2 % 60
-    return hour * 60 + minute
-
-
-def should_brush(target_minute: int, now=None) -> bool:
-    """当前所在 30 分钟槽是否包含目标时刻。"""
-    if now is None:
-        now = bj_now()
-    slot_start = (now.hour * 60 + now.minute) // 30 * 30
-    return slot_start <= target_minute < slot_start + 30
+                and self.max_step >= self.min_step)
 
 
 # ---------------------------------------------------------------- 登录与刷步
 
 def desensitize(user: str):
-    """账号脱敏，避免日志/推送泄露全账号。"""
+    """账号脱敏，避免公开日志泄露全账号。"""
     if len(user) <= 8:
         n = max(len(user) // 3, 1)
         return f"{user[:n]}***{user[-n:]}"
@@ -228,10 +195,12 @@ def main():
         traceback.print_exc()
         exit(1)
     if not config.valid:
-        print("CONFIG 校验失败：USER/PWD 用 # 分隔且数量一致，BRUSH_HOURS 必填，MAX_STEP>=MIN_STEP")
+        print("CONFIG 校验失败：USER/PWD 用 # 分隔且数量一致，MAX_STEP>=MIN_STEP")
         exit(1)
 
     force = os.environ.get("FORCE", "").lower() in ("1", "true", "yes")
+    if force:
+        print(f"[{format_now()}] 手动强制刷全部账号")
 
     aes_key = None
     raw_key = os.environ.get("AES_KEY")
@@ -243,33 +212,11 @@ def main():
             print("AES_KEY 长度必须为 16 字符，本次不缓存 token")
     user_tokens = prepare_user_tokens(aes_key) if aes_key else dict()
 
-    now = bj_now()
-    target_minutes = {
-        u: daily_target_minute(u, config.brush_hours, now.strftime("%Y-%m-%d"))
-        for u in config.user_list
-    }
-
-    if not force:
-        # 只处理当前槽位负责的账号
-        todo = [(u, t) for u, t in target_minutes.items() if should_brush(t, now)]
-        if not todo:
-            print(f"[{format_now()}] 本次无账号需要刷步，静默退出")
-            return
-    else:
-        todo = list(target_minutes.items())
-        print(f"[{format_now()}] 强制模式，跳过槽位判定直接刷全部账号")
-
     results = []
-    for idx, (user, target) in enumerate(todo):
-        brush_hour, brush_min = divmod(target, 60)
-        if not force and now.hour * 60 + now.minute < target:
-            # 槽内稍等至目标时刻，保证动作恰好发生在目标点附近
-            wait_s = (target - (now.hour * 60 + now.minute)) * 60 - now.second
-            if wait_s > 0:
-                print(f"账号 {desensitize(user)} 等待 {wait_s}s 到目标时刻 {brush_hour:02d}:{brush_min:02d}")
-                time.sleep(wait_s)
+    total = len(config.user_list)
+    for idx, user in enumerate(config.user_list):
         step = random.randint(config.min_step, config.max_step)
-        runner = MiMotionRunner(user, config.pwd_list[config.user_list.index(user)], user_tokens)
+        runner = MiMotionRunner(user, config.pwd_list[idx], user_tokens)
         try:
             ok, msg = runner.brush(step)
             exec_msg = f"修改步数({step})[{msg}]"
@@ -278,12 +225,10 @@ def main():
         for line in runner.logs:
             print(f"[{desensitize(user)}] {line}")
         print(f"[{format_now()}] {desensitize(user)} -> {exec_msg}")
-        # 推送到私有 Telegram 时用完整账号便于区分；Actions 公开日志里已脱敏
         results.append({"user": user, "success": ok, "msg": exec_msg})
-        if idx < len(todo) - 1:
+        if idx < total - 1:
             time.sleep(config.sleep_gap)
 
-    # 只在实际刷过步时才推送
     success = sum(1 for r in results if r["success"])
     summary = f"刷步完成，共{len(results)}个账号，成功{success}，失败{len(results) - success}"
     lines = [summary, ""]

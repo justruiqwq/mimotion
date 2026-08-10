@@ -1,15 +1,13 @@
 name: 刷步数
 
 on:
-  # 每 30 分钟检查一次。脚本内部用确定性目标时刻判定，
-  # 只有命中当天目标时刻所在槽位的这次运行才会真正刷步，其余静默退出。
-  # 北京时间 8:00 ~ 23:59（UTC 0:00~15:59），覆盖 BRUSH_HOURS 常用范围。
+  # 每天北京时间 12:30 触发一次（UTC 04:30），脚本对全部账号各刷一次随机步数
   schedule:
-    - cron: '*/30 0-15 * * *'
+    - cron: '30 4 * * *'
   workflow_dispatch:
     inputs:
       force:
-        description: '忽略随机时刻，立即刷全部账号（用于测试）'
+        description: '立即刷全部账号（手动补刷或测试用）'
         required: false
         default: false
         type: boolean
