@@ -35,7 +35,8 @@ jobs:
           python3 main.py
 
       - name: persist tokens
-        # 仅在 encrypted_tokens.data 有变化时才提交，避免无谓的 commit 噪音
+        # 仅在 encrypted_tokens.data 有变化时才提交，避免无谓的 commit 噪音；
+        # 手动 force 与定时任务可能并发触发，push 前先 rebase 避免 non-fast-forward 冲突
         run: |
           git config user.name github-actions
           git config user.email github-actions@users.noreply.github.com
@@ -44,5 +45,6 @@ jobs:
             echo "token 无变化，跳过提交"
           else
             git commit -m "persist tokens trigger by ${{ github.event_name }}"
+            git pull --rebase origin master || true
             git push origin master
           fi
