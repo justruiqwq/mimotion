@@ -1,11 +1,8 @@
 name: 刷步数
 
 on:
-  # 每天北京时间 12:30 / 13:00 / 13:30 触发（UTC 04:30/05:00/05:30）。
-  # GitHub Actions 的 schedule 可能被延迟或跳过，多设几个点用脚本去重兜底：
-  # 当天已刷过就跳过，保证即使 12:30 被跳过也能补上，且一天只刷一次。
-  schedule:
-    - cron: '30 4,5,6 * * *'
+  # 由 Scheduler 工作流通过 dispatch 可靠触发；也可手动触发。
+  # 不用 schedule 直接触发，因为 schedule 事件不可靠（会延迟/跳过）。
   workflow_dispatch:
     inputs:
       force:

@@ -1,0 +1,35 @@
+name: Scheduler
+
+on:
+  # 高频检查调度器：每 5 分钟一次。GitHub 的 schedule 事件不可靠（会延迟/跳过），
+  # 但点越多越稳。这里只在目标窗口内才会通过 dispatch 触发真正的刷步工作流，
+  # 平时都是极短的空检查，几乎零成本。
+  schedule:
+    - cron: '*/5 * * * *'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 判断是否到刷步窗口并触发
+        env:
+          GH_TOKEN: ${{ secrets.PAT }}
+        run: |
+          # 目标窗口（北京时间，分钟区间，闭区间）：每天 12:30~12:59、13:00~13:59、14:00~14:30
+          # 注意：即使某次检查被延迟，只要落在窗口内就会被触发；去重由刷步脚本负责
+          set -e
+          HOUR=$(TZ=Asia/Shanghai date '+%H')
+          MIN=$(TZ=Asia/Shanghai date '+%M')
+          H=$((10#$HOUR)); M=$((10#$MIN))
+
+          # 判断是否在 12:30 ~ 14:30（北京时间）之间
+          start=750   # 12*60+30
+          end=870     # 14*60+30
+          now=$((H*60+M))
+          if [ "$now" -ge "$start" ] && [ "$now" -le "$end" ]; then
+            echo "[$(TZ=Asia/Shanghai date '+%F %T')] 在北京时间 12:30~14:30 窗口内，触发刷步工作流"
+            gh workflow run "刷步数" --repo "${GITHUB_REPOSITORY}" --ref "${GITHUB_REF_NAME}" --field force=false
+          else
+            echo "[$(TZ=Asia/Shanghai date '+%F %T')] 不在刷步窗口（$(TZ=Asia/Shanghai date '+%H:%M')），跳过"
+          fi
