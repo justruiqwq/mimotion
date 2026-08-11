@@ -1,9 +1,10 @@
 # -*- coding: utf8 -*-
 """
-优雅版 mimotion：每天固定时刻（北京时间 12:30，由 GitHub Actions cron 触发）刷一次随机步数。
+优雅版 mimotion：每天固定时刻（北京时间 12:30 起，由 GitHub Actions cron 触发）刷一次随机步数。
 
-- GitHub Actions 每天 12:30(北京) 触发一次本脚本，脚本对所有账号各刷一次随机步数。
-- 手动触发 workflow 并勾选 force 时同样刷全部账号（补刷/测试用）。
+- GitHub Actions 每天 12:30/13:00/13:30(北京) 触发本脚本；因 schedule 可能被延迟或跳过，
+  脚本用"当天已刷过就跳过"去重：当天第一个成功的运行刷全部账号，后续运行静默跳过。
+- 手动触发 workflow 并勾选 force 时忽略去重，立即刷全部账号（补刷/测试用）。
 - 登录沿用华米三层令牌链，token 用 AES_KEY 加密缓存在 encrypted_tokens.data。
 - 刷完后通过 Telegram 推送结果。
 """
@@ -212,6 +213,13 @@ def main():
             print("AES_KEY 长度必须为 16 字符，本次不缓存 token")
     user_tokens = prepare_user_tokens(aes_key) if aes_key else dict()
 
+    today = bj_now().strftime("%Y-%m-%d")
+    if not force and user_tokens.get("_last_brush_date") == today:
+        print(f"[{format_now()}] 今天 {today} 已刷过步，跳过")
+        return
+    if not force:
+        print(f"[{format_now()}] 今天首次刷步（上次刷步日期：{user_tokens.get('_last_brush_date')}）")
+
     results = []
     total = len(config.user_list)
     for idx, user in enumerate(config.user_list):
@@ -241,6 +249,10 @@ def main():
         send_telegram_message(config.tg_bot_token, config.tg_chat_id, "\n".join(lines))
     else:
         print("未配置 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID，跳过推送")
+
+    # 记录刷步日期，用于当天去重
+    if success > 0:
+        user_tokens["_last_brush_date"] = today
 
     if aes_key:
         persist_user_tokens(user_tokens, aes_key)
