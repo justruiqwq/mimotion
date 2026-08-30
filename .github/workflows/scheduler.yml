@@ -25,7 +25,7 @@ jobs:
 
           # 判断是否在 12:30 ~ 14:30（北京时间）之间
           start=750   # 12*60+30
-          end=870     # 14*60+30
+          end=1000     # 14*60+30
           now=$((H*60+M))
           if [ "$now" -ge "$start" ] && [ "$now" -le "$end" ]; then
             echo "[$(TZ=Asia/Shanghai date '+%F %T')] 在北京时间 12:30~14:30 窗口内，触发刷步工作流"
